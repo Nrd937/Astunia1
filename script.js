@@ -1,4 +1,4 @@
-const API_BASE = "http://192.168.1.17:5000";
+const API_BASE = "https://astunia1-production.up.railway.app";
 
 const welcome = document.getElementById("welcome");
 const messages = document.getElementById("messages");
