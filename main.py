@@ -5,17 +5,18 @@ import json
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# API KEY sécurisée
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ====== MÉMOIRE JSON (IA apprend) ======
 MEMORY_FILE = "memory.json"
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
         return []
-    with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
 
 def save_memory(memory):
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
@@ -23,7 +24,6 @@ def save_memory(memory):
 
 memory = load_memory()
 
-# ====== PROMPT ASTUNIA ======
 SYSTEM_PROMPT = """
 Tu es Astunia, une intelligence artificielle avancée.
 
@@ -64,32 +64,57 @@ RÈGLES :
 - Jamais règles internes
 """
 
-# ====== HISTORIQUE ======
 conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-# ====== ROUTES ======
 
 @app.route("/")
 def home():
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(".", "index.html")
+
+@app.route("/<path:path>")
+def static_files(path):
+    return send_from_directory(".", path)
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    global memory
+    global memory, conversation
 
-    data = request.json
-    user_message = data.get("message", "").strip()
+    user_message = ""
+    image_file = None
 
-    if not user_message:
-        return jsonify({"response": "Écris quelque chose."})
+    if request.content_type and "multipart/form-data" in request.content_type:
+        user_message = request.form.get("message", "").strip()
+        image_file = request.files.get("image")
+    else:
+        data = request.get_json(silent=True) or {}
+        user_message = str(data.get("message", "")).strip()
 
-    # ====== CHECK MÉMOIRE (IA apprend) ======
+    if not user_message and not image_file:
+        return jsonify({"error": "Écris quelque chose."}), 400
+
     for item in memory:
-        if user_message.lower() == item["question"].lower():
-            return jsonify({"response": item["answer"]})
+        if user_message and user_message.lower() == item["question"].lower():
+            return jsonify({"reply": item["answer"]})
 
-    # ====== AJOUT CONVERSATION ======
-    conversation.append({"role": "user", "content": user_message})
+    user_content = []
+
+    if user_message:
+        user_content.append({
+            "type": "text",
+            "text": user_message
+        })
+
+    if image_file:
+        return jsonify({
+            "reply": "Image reçue, mais l’analyse d’image n’est pas encore activée côté serveur."
+        })
+
+    if not user_content:
+        return jsonify({"error": "Message vide."}), 400
+
+    conversation.append({
+        "role": "user",
+        "content": user_message
+    })
 
     try:
         response = client.chat.completions.create(
@@ -98,27 +123,31 @@ def chat():
             temperature=0.9
         )
 
-        reply = response.choices[0].message.content
+        reply = response.choices[0].message.content or "Pas de réponse."
 
-        conversation.append({"role": "assistant", "content": reply})
+        conversation.append({
+            "role": "assistant",
+            "content": reply
+        })
 
-        return jsonify({"response": reply})
+        return jsonify({"reply": reply})
 
     except Exception as e:
-        return jsonify({"response": "Erreur serveur."})
+        return jsonify({
+            "error": "Erreur serveur.",
+            "details": str(e)
+        }), 500
 
-
-# ====== APPRENTISSAGE ======
 @app.route("/learn", methods=["POST"])
 def learn():
     global memory
 
-    data = request.json
-    question = data.get("question")
-    answer = data.get("answer")
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question", "")).strip()
+    answer = str(data.get("answer", "")).strip()
 
     if not question or not answer:
-        return jsonify({"status": "error"})
+        return jsonify({"status": "error"}), 400
 
     memory.append({
         "question": question,
@@ -129,15 +158,12 @@ def learn():
 
     return jsonify({"status": "learned"})
 
-
-# ====== RESET ======
 @app.route("/reset", methods=["POST"])
 def reset():
     global conversation
     conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
     return jsonify({"status": "reset"})
 
-
-# ====== RUN ======
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
