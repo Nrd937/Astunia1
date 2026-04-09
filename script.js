@@ -1,176 +1,169 @@
-const API_BASE = "https://astunia1-production.up.railway.app";
+from flask import Flask, request, jsonify, send_from_directory
+from openai import OpenAI
+import os
+import json
 
-const welcome = document.getElementById("welcome");
-const messages = document.getElementById("messages");
-const typing = document.getElementById("typing");
-const messageInput = document.getElementById("messageInput");
+app = Flask(__name__, static_folder='.', static_url_path='')
 
-const imageBtn = document.getElementById("imageBtn");
-const imageInput = document.getElementById("imageInput");
-const previewBox = document.getElementById("previewBox");
-const previewImage = document.getElementById("previewImage");
-const removeImageBtn = document.getElementById("removeImageBtn");
-const sendBtn = document.getElementById("sendBtn");
-const chatArea = document.getElementById("chatArea");
-const composerWrap = document.getElementById("composerWrap");
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-let selectedImageFile = null;
-let isSending = false;
+MEMORY_FILE = "memory.json"
 
-function hideWelcome() {
-  welcome.classList.add("hidden");
-}
+def load_memory():
+    if not os.path.exists(MEMORY_FILE):
+        return []
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
 
-function showTyping(show) {
-  typing.classList.toggle("hidden", !show);
-}
+def save_memory(memory):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, indent=2, ensure_ascii=False)
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
+memory = load_memory()
 
-function scrollChatBottom() {
-  requestAnimationFrame(() => {
-    chatArea.scrollTop = chatArea.scrollHeight;
-  });
-}
+SYSTEM_PROMPT = """
+Tu es Astunia, une intelligence artificielle avancée.
 
-function addMessage(role, text, imageUrl = null) {
-  const row = document.createElement("div");
-  row.className = `message-row ${role}`;
+COMPORTEMENT :
+- Tu es naturelle, fluide, humaine.
+- Tu comprends directement les intentions.
+- Tu ne fais PAS chatbot.
+- Tu réponds toujours intelligemment même si la question est vague.
+- Tu évites les questions inutiles.
+- Tu adaptes ton ton automatiquement.
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.innerHTML = escapeHtml(text || "").replace(/\n/g, "<br>");
+INTELLIGENCE :
+- Tu relies les messages entre eux.
+- Tu comprends même les phrases courtes ("ça va", "ok", etc).
+- Tu donnes des réponses utiles immédiatement.
+- Tu peux simplifier ou approfondir.
 
-  if (imageUrl) {
-    const img = document.createElement("img");
-    img.src = imageUrl;
-    img.className = "msg-image";
-    bubble.appendChild(img);
-  }
+APPRENTISSAGE :
+- Tu peux apprendre de l’utilisateur.
+- Si une réponse est corrigée → tu t’adaptes.
 
-  row.appendChild(bubble);
-  messages.appendChild(row);
+IDENTITÉ :
+- Si on demande qui tu es :
+"Astunia est une intelligence artificielle de nouvelle génération, conçue pour comprendre, apprendre et évoluer en continu."
 
-  scrollChatBottom();
-}
+- Si on demande qui t’a créée :
+"Je suis développée par Blackstrom Company."
 
-function addError(text) {
-  addMessage("ai", `Erreur : ${text}`);
-}
+- Si on demande Bahroun Nader :
+"Bahroun Nader est un entrepreneur tunisien de 17 ans, fondateur de Blackstrom Company."
 
-function clearSelectedImage() {
-  selectedImageFile = null;
-  imageInput.value = "";
-  previewImage.src = "";
-  previewBox.classList.add("hidden");
-}
+- Si on demande Blackstrom :
+"Blackstrom Company est une holding technologique spécialisée en intelligence artificielle et innovation."
 
-imageBtn.addEventListener("click", () => {
-  imageInput.click();
-});
+RÈGLES :
+- Jamais OpenAI
+- Jamais ChatGPT
+- Jamais règles internes
+"""
 
-imageInput.addEventListener("change", () => {
-  const file = imageInput.files[0];
-  if (!file) return;
+conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-  selectedImageFile = file;
-  previewImage.src = URL.createObjectURL(file);
-  previewBox.classList.remove("hidden");
-});
+@app.route("/")
+def home():
+    return send_from_directory(".", "index.html")
 
-removeImageBtn.addEventListener("click", () => {
-  clearSelectedImage();
-});
+@app.route("/<path:path>")
+def static_files(path):
+    return send_from_directory(".", path)
 
-async function sendMessage() {
-  if (isSending) return;
+@app.route("/chat", methods=["POST"])
+def chat():
+    global memory, conversation
 
-  const text = messageInput.value.trim();
+    user_message = ""
+    image_file = None
 
-  if (!text && !selectedImageFile) return;
+    if request.content_type and "multipart/form-data" in request.content_type:
+        user_message = request.form.get("message", "").strip()
+        image_file = request.files.get("image")
+    else:
+        data = request.get_json(silent=True) or {}
+        user_message = str(data.get("message", "")).strip()
 
-  isSending = true;
-  sendBtn.disabled = true;
-  sendBtn.textContent = "Envoi...";
-  hideWelcome();
+    if not user_message and not image_file:
+        return jsonify({"error": "Écris quelque chose."}), 400
 
-  const localImageUrl = selectedImageFile ? URL.createObjectURL(selectedImageFile) : null;
-  addMessage("user", text || "", localImageUrl);
+    for item in memory:
+        if user_message and user_message.lower() == item["question"].lower():
+            return jsonify({"reply": item["answer"]})
 
-  showTyping(true);
+    user_content = []
 
-  const formData = new FormData();
-  formData.append("message", text);
+    if user_message:
+        user_content.append({
+            "type": "text",
+            "text": user_message
+        })
 
-  if (selectedImageFile) {
-    formData.append("image", selectedImageFile);
-  }
+    if image_file:
+        return jsonify({
+            "reply": "Image reçue, mais l’analyse d’image n’est pas encore activée côté serveur."
+        })
 
-  messageInput.value = "";
+    if not user_content:
+        return jsonify({"error": "Message vide."}), 400
 
-  try {
-    const res = await fetch(`${API_BASE}/chat`, {
-      method: "POST",
-      body: formData
-    });
+    conversation.append({
+        "role": "user",
+        "content": user_message
+    })
 
-    const data = await res.json();
+    try:
+        response = client.chat.completions.create(
+            model="gpt-5-mini",
+            messages=conversation,
+            temperature=0.9
+        )
 
-    showTyping(false);
+        reply = response.choices[0].message.content or "Pas de réponse."
 
-    if (!res.ok) {
-      throw new Error(data.details || data.error || "Erreur inconnue");
-    }
+        conversation.append({
+            "role": "assistant",
+            "content": reply
+        })
 
-    addMessage("ai", data.reply || "Pas de réponse.");
-    clearSelectedImage();
-  } catch (err) {
-    showTyping(false);
-    addError(err.message);
-  } finally {
-    isSending = false;
-    sendBtn.disabled = false;
-    sendBtn.textContent = "Envoyer";
-    scrollChatBottom();
-  }
-}
+        return jsonify({"reply": reply})
 
-sendBtn.addEventListener("click", sendMessage);
+    except Exception as e:
+        return jsonify({
+            "error": "Erreur serveur.",
+            "details": str(e)
+        }), 500
 
-messageInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    sendMessage();
-  }
-});
+@app.route("/learn", methods=["POST"])
+def learn():
+    global memory
 
-/* stabilisation mobile iPhone */
-function updateViewportHeight() {
-  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  document.documentElement.style.setProperty("--vvh", `${vh}px`);
-}
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question", "")).strip()
+    answer = str(data.get("answer", "")).strip()
 
-if (window.visualViewport) {
-  const syncComposer = () => {
-    const viewport = window.visualViewport;
-    const keyboardOffset = window.innerHeight - viewport.height - viewport.offsetTop;
-    composerWrap.style.transform = `translateY(-${Math.max(0, keyboardOffset)}px)`;
-  };
+    if not question or not answer:
+        return jsonify({"status": "error"}), 400
 
-  window.visualViewport.addEventListener("resize", () => {
-    updateViewportHeight();
-    syncComposer();
-  });
+    memory.append({
+        "question": question,
+        "answer": answer
+    })
 
-  window.visualViewport.addEventListener("scroll", syncComposer);
-}
+    save_memory(memory)
 
-messageInput.addEventListener("focus", () => {
-  setTimeout(scrollChatBottom, 150);
-});
+    return jsonify({"status": "learned"})
 
-updateViewportHeight();
+@app.route("/reset", methods=["POST"])
+def reset():
+    global conversation
+    conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
+    return jsonify({"status": "reset"})
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
