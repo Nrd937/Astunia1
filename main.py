@@ -119,8 +119,7 @@ def chat():
     try:
         response = client.chat.completions.create(
             model="gpt-5-mini",
-            messages=conversation,
-            temperature=0.9
+            messages=conversation
         )
 
         reply = response.choices[0].message.content or "Pas de réponse."
