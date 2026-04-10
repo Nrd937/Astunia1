@@ -1,50 +1,18 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
-  />
-  <title>Astunia</title>
-  <link rel="stylesheet" href="style.css" />
+    <meta charset="UTF-8">
+    <title>Astunia - Maintenance</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app" id="app">
-    <main class="chat-area" id="chatArea">
-      <div class="welcome" id="welcome">
-        <h1>Bonjour, je suis Astunia.</h1>
-        <p>Comment puis-je vous aider aujourd’hui ?</p>
-      </div>
 
-      <div class="messages" id="messages"></div>
-      <div class="typing hidden" id="typing">Astunia écrit…</div>
-    </main>
-
-    <div class="composer-wrap" id="composerWrap">
-      <div class="composer">
-        <button id="imageBtn" class="icon-btn left-btn" type="button">+</button>
-
-        <input type="file" id="imageInput" accept="image/*" hidden />
-
-        <input
-          id="messageInput"
-          type="text"
-          placeholder="Demander à Astunia"
-          autocomplete="off"
-          enterkeyhint="send"
-        />
-
-        <button id="sendBtn" class="send-btn" type="button">Envoyer</button>
-      </div>
-
-      <div class="preview hidden" id="previewBox">
-        <img id="previewImage" alt="aperçu" />
-        <button id="removeImageBtn" type="button">Retirer l’image</button>
-      </div>
+    <div class="container">
+        <h1>Astunia</h1>
+        <p id="message">Chargement...</p>
+        <div class="loader"></div>
     </div>
-  </div>
 
-  <script src="script.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
