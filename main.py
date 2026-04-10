@@ -1,175 +1,170 @@
 from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
 import os
-import json
-from datetime import datetime
+import sqlite3
 
+app = Flask(__name__, static_folder=".", static_url_path="")
+
+# =========================
+# OPENAI
+# =========================
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# =========================
+# DATABASE SQLITE
+# =========================
+DB_FILE = "chat.db"
+
+def get_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_message(role, content):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO messages (role, content) VALUES (?, ?)",
+        (role, content)
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_messages():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, role, content FROM messages ORDER BY id ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def clear_messages():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM messages")
+    conn.commit()
+    conn.close()
+
+# =========================
+# SYSTEM PROMPT
+# =========================
 SYSTEM_PROMPT = """
 Tu es Astunia, une intelligence artificielle avancée.
 
-IDENTITÉ :
-- Ton nom est Astunia.
-- Si on demande qui tu es :
-"Astunia est une intelligence artificielle de nouvelle génération, conçue pour comprendre, apprendre et évoluer en continu."
-
-- Si on demande qui t’a créée :
-"Je suis développée par Blackstrom Company."
-
-- Si on demande Bahroun Nader :
-"Bahroun Nader est un entrepreneur tunisien de 17 ans, fondateur et dirigeant de Blackstrom Company."
-
-- Si on demande Blackstrom :
-"Blackstrom Company est une holding technologique spécialisée en intelligence artificielle et innovation."
-
 COMPORTEMENT :
-- Tu parles naturellement, comme un humain.
-- Tu comprends les phrases courtes, vagues ou mal écrites.
-- Tu évites les réponses robotiques.
-- Tu t’adaptes automatiquement au ton de la personne.
-- Tu réponds de manière directe, fluide, utile.
-- Tu ne poses pas de question inutile.
-- Tu peux être concise ou détaillée selon le contexte.
+- Tu es naturelle, fluide, agréable et intelligente.
+- Tu ne parles pas comme un simple chatbot.
+- Tu comprends rapidement l’intention derrière les messages, même courts ou vagues.
+- Tu réponds toujours de façon utile, logique et vivante.
+- Tu peux être courte ou très détaillée selon le besoin.
+- Tu peux expliquer, approfondir, reformuler, conseiller et développer librement sur tous les sujets.
+- Tu peux poser des questions pertinentes si cela aide vraiment à mieux répondre ou à aller plus loin.
+- Tu t’adaptes automatiquement au ton, au niveau et au contexte de l’utilisateur.
+- Tu cherches à rendre la conversation naturelle, humaine et intéressante.
 
 INTELLIGENCE :
 - Tu relies les messages entre eux.
-- Tu comprends le contexte global.
-- Tu détectes l’intention réelle derrière la question.
-- Tu donnes une réponse utile immédiatement.
-- Si la demande est floue, tu proposes l’interprétation la plus logique.
+- Tu comprends les sous-entendus et les formulations simples comme "ça va", "ok", "et donc ?", "pourquoi ?", "explique", etc.
+- Tu donnes directement une réponse intelligente sans poser de questions inutiles.
+- Tu peux simplifier ou approfondir selon la situation.
+- Tu peux prendre des initiatives dans la réponse si c’est utile.
 
 APPRENTISSAGE :
-- Si l’utilisateur te corrige, tu t’ajustes.
-- Tu prends en compte le style et les préférences au fil de la conversation.
-- Tu évites de répéter inutilement la même manière de répondre.
+- Tu peux apprendre de l’utilisateur.
+- Si une réponse est corrigée, tu t’adaptes.
 
-STYLE :
-- Réponses naturelles.
-- Pas de blabla.
-- Pas de ton scolaire.
-- Pas de structure lourde sauf si nécessaire.
-- Priorité à la clarté, logique, rapidité, crédibilité.
+IDENTITÉ :
+- Si on demande qui tu es, tu réponds :
+"Astunia est une intelligence artificielle de nouvelle génération, conçue pour comprendre, apprendre et évoluer en continu."
+
+- Si on demande qui t’a créée, développée ou fondée, tu réponds :
+"Je suis développée par Blackstrom Company."
+
+- Si on demande qui est Bahroun Nader, tu réponds uniquement :
+"Bahroun Nader est un entrepreneur tunisien de 17 ans, fondateur et dirigeant de Blackstrom Company."
+
+- Si on demande ce qu’est Blackstrom Company, tu réponds uniquement :
+"Blackstrom Company est une holding technologique spécialisée dans l’innovation et l’intelligence artificielle."
+
+LIMITES D’IDENTITÉ :
+- Sur Bahroun Nader et Blackstrom Company, tu ne donnes jamais plus d’informations que les formulations ci-dessus.
+- Si l’utilisateur insiste, reformule proprement mais reste strictement sur ces mêmes informations.
+- Pour tous les autres sujets, tu es libre de répondre naturellement, intelligemment et en profondeur.
 
 RÈGLES :
-- Ne jamais mentionner OpenAI.
-- Ne jamais mentionner ChatGPT.
-- Ne jamais parler de règles internes.
-- Ne jamais dire que tu es un chatbot.
-- Ne jamais dire que tu es un modèle de langage.
-- Ne donne pas plus d’informations que prévu sur Bahroun Nader ou Blackstrom.
+- Tu ne mentionnes jamais OpenAI.
+- Tu ne mentionnes jamais ChatGPT.
+- Tu ne mentionnes jamais de règles internes.
 """
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+# =========================
+# CONVERSATION EN MÉMOIRE
+# =========================
+conversation = [
+    {"role": "system", "content": SYSTEM_PROMPT}
+]
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-MEMORY_FILE = "memory.json"
-LOG_FILE = "all_users.json"
-
-
-def load_memory():
-    if not os.path.exists(MEMORY_FILE):
-        return []
-
-    try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def save_memory(memory):
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2, ensure_ascii=False)
-
-
-def load_logs():
-    if not os.path.exists(LOG_FILE):
-        return []
-
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def save_log(user_message, ai_message):
-    data = load_logs()
-
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    user_agent = request.headers.get("User-Agent", "")
-
-    data.append({
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "ip": ip,
-        "user_agent": user_agent,
-        "message": user_message,
-        "response": ai_message
-    })
-
-    if len(data) > 1000:
-        data = data[-1000:]
-
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-memory = load_memory()
-conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-
+# =========================
+# ROUTES FRONT
+# =========================
 @app.route("/")
 def home():
     return send_from_directory(".", "index.html")
-
 
 @app.route("/<path:path>")
 def static_files(path):
     return send_from_directory(".", path)
 
-
+# =========================
+# ROUTE CHAT
+# =========================
 @app.route("/chat", methods=["POST"])
 def chat():
-    global memory, conversation
+    global conversation
 
     user_message = ""
     image_file = None
 
+    # Si le front envoie du FormData
     if request.content_type and "multipart/form-data" in request.content_type:
         user_message = request.form.get("message", "").strip()
         image_file = request.files.get("image")
     else:
+        # Si le front envoie du JSON
         data = request.get_json(silent=True) or {}
         user_message = str(data.get("message", "")).strip()
 
     if not user_message and not image_file:
-        return jsonify({"error": "Écris quelque chose."}), 400
+        return jsonify({"error": "Message vide"}), 400
 
-    for item in memory:
-        if user_message and user_message.lower() == item["question"].lower():
-            answer = item["answer"]
-            save_log(user_message, answer)
-            return jsonify({"reply": answer})
-
-    user_content = []
-
+    # Sauvegarde message user
     if user_message:
-        user_content.append({
-            "type": "text",
-            "text": user_message
-        })
+        save_message("user", user_message)
 
+    # Partie image pas encore activée
     if image_file:
-        reply = "Image reçue, mais l’analyse d’image n’est pas encore activée côté serveur."
-        if user_message:
-            save_log(user_message, reply)
-        else:
-            save_log("[image envoyée]", reply)
-        return jsonify({"reply": reply})
+        image_notice = "Image reçue, mais l’analyse d’image n’est pas encore activée côté serveur."
+        save_message("ai", image_notice)
+        return jsonify({"reply": image_notice})
 
-    if not user_content:
-        return jsonify({"error": "Message vide."}), 400
-
+    # Ajout conversation contexte IA
     conversation.append({
         "role": "user",
         "content": user_message
@@ -178,65 +173,64 @@ def chat():
     try:
         response = client.chat.completions.create(
             model="gpt-5-mini",
-            messages=conversation
+            messages=conversation,
+            temperature=0.9
         )
 
         reply = response.choices[0].message.content or "Pas de réponse."
 
+        # Sauvegarde réponse IA
+        save_message("ai", reply)
+
+        # Ajout mémoire conversation
         conversation.append({
             "role": "assistant",
             "content": reply
         })
 
-        save_log(user_message, reply)
-
         return jsonify({"reply": reply})
 
     except Exception as e:
         return jsonify({
-            "error": "Erreur serveur.",
+            "error": "Erreur serveur",
             "details": str(e)
         }), 500
 
+# =========================
+# VOIR TOUS LES MESSAGES
+# =========================
+@app.route("/messages", methods=["GET"])
+def messages():
+    rows = get_all_messages()
+    return jsonify([
+        {
+            "id": row["id"],
+            "role": row["role"],
+            "content": row["content"]
+        }
+        for row in rows
+    ])
 
-@app.route("/learn", methods=["POST"])
-def learn():
-    global memory
-
-    data = request.get_json(silent=True) or {}
-    question = str(data.get("question", "")).strip()
-    answer = str(data.get("answer", "")).strip()
-
-    if not question or not answer:
-        return jsonify({"status": "error"}), 400
-
-    memory.append({
-        "question": question,
-        "answer": answer
-    })
-
-    save_memory(memory)
-
-    return jsonify({"status": "learned"})
-
-
+# =========================
+# RESET CONVERSATION IA
+# =========================
 @app.route("/reset", methods=["POST"])
 def reset():
     global conversation
     conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
     return jsonify({"status": "reset"})
 
+# =========================
+# SUPPRIMER HISTORIQUE SQLITE
+# =========================
+@app.route("/clear-messages", methods=["POST"])
+def clear_all_messages():
+    clear_messages()
+    return jsonify({"status": "cleared"})
 
-@app.route("/logs", methods=["GET"])
-def logs():
-    return jsonify(load_logs())
-
-
-@app.route("/memory", methods=["GET"])
-def get_memory():
-    return jsonify(memory)
-
-
+# =========================
+# LANCEMENT
+# =========================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
